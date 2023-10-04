@@ -20,13 +20,13 @@ PERMITTED_ADV_MODELS = [
   "vehicle.chevrolet.impala",           # WW
   "vehicle.dodge.charger_2020",         # WW
   "vehicle.dodge.charger_police_2020",  # WW
-  "vehicle.ford.ambulance",             # WW
+#   "vehicle.ford.ambulance",             # WW (some lights occluded)
   "vehicle.ford.crown",                 # WW
   "vehicle.lincoln.mkz_2017",           # WW
   "vehicle.lincoln.mkz_2020",           # WW
   "vehicle.mercedes.coupe_2020",        # WW
-  "vehicle.mercedes.sprinter",          # WW
-  "vehicle.mitsubishi.fusorosa",        # WW
+#   "vehicle.mercedes.sprinter",          # WW (some lights occluded)
+#   "vehicle.mitsubishi.fusorosa",        # WW (some lights occluded)
   "vehicle.nissan.patrol_2021",         # WW
   "vehicle.tesla.cybertruck",           # WW
   "vehicle.tesla.model3",               # WW
@@ -41,13 +41,13 @@ PERMITTED_ADV_MODELS = [
   ]
 
 PERMITTED_LIGHT_STATES = [
-    # carla.VehicleLightState.NONE,
-    # carla.VehicleLightState.LeftBlinker,
-    # carla.VehicleLightState.RightBlinker,
-    # carla.VehicleLightState.Brake,
-    # carla.VehicleLightState.LeftBlinker | carla.VehicleLightState.RightBlinker,
-    # carla.VehicleLightState.LeftBlinker | carla.VehicleLightState.Brake,
-    # carla.VehicleLightState.RightBlinker | carla.VehicleLightState.Brake,
+    carla.VehicleLightState.NONE,
+    carla.VehicleLightState.LeftBlinker,
+    carla.VehicleLightState.RightBlinker,
+    carla.VehicleLightState.Brake,
+    carla.VehicleLightState.LeftBlinker | carla.VehicleLightState.RightBlinker,
+    carla.VehicleLightState.LeftBlinker | carla.VehicleLightState.Brake,
+    carla.VehicleLightState.RightBlinker | carla.VehicleLightState.Brake,
     carla.VehicleLightState.LeftBlinker | carla.VehicleLightState.RightBlinker | carla.VehicleLightState.Brake,
 ]
 

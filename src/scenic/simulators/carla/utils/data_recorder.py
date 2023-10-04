@@ -12,7 +12,7 @@ import shutil
 OUTPUT_SIZE = (224, 224)
 BBOX_MIN_SIZE = (80, 80)
 
-MASK_COLORS = [
+CAR_SEM_VALS = [
     13,  # rider
     14,  # Car
     15,  # truck
@@ -20,8 +20,9 @@ MASK_COLORS = [
     17,  # train
     18,  # motorcycle
     19,  # bicycle
-    32,  # Lights
 ]
+
+LIGHT_SEM_VAL = 32
 
 
 def _safe_ingest_async(*args, **kwargs):
@@ -56,8 +57,9 @@ def _ingest_async(
     # Find pixels occupied by car
     ################################
 
-    mask = (sem[:, :, 0] >= min(MASK_COLORS))
-    light_mask = sem[:, :, 0] >= 32
+    mask = (sem[:, :, 0] >= min(CAR_SEM_VALS)) & (sem[:, :, 0] <= max(CAR_SEM_VALS))
+    light_mask = sem[:, :, 0] == 32
+    mask |= light_mask
 
     if not mask.any():
         _print("No car detected, skipping")
@@ -137,7 +139,7 @@ def _ingest_async(
         if state == "U":
             continue
         if state == "O":
-            icon *= .33
+            icon //= 3
 
         dst.paste(Image.fromarray(icon), (cam_img.width * 2, (i * cam_img.height) // 3))
 
