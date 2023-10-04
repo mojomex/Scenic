@@ -22,6 +22,7 @@ from scenic.simulators.carla.blueprints import oldBlueprintNames
 import scenic.simulators.carla.utils.utils as utils
 import scenic.simulators.carla.utils.visuals as visuals
 from scenic.syntax.veneer import verbosePrint
+from scenic.simulators.carla.utils.data_recorder import DataRecorder
 
 
 class CarlaSimulator(DrivingSimulator):
@@ -33,7 +34,7 @@ class CarlaSimulator(DrivingSimulator):
         map_path,
         address="127.0.0.1",
         port=2000,
-        timeout=10,
+        timeout=5,
         render=True,
         record="",
         timestep=0.1,
@@ -42,7 +43,7 @@ class CarlaSimulator(DrivingSimulator):
         super().__init__()
         verbosePrint(f"Connecting to CARLA on port {port}")
         self.client = carla.Client(address, port)
-        self.client.set_timeout(timeout)  # limits networking operations (seconds)
+        self.client.set_timeout(20)  # increase timeout for world loading
         if carla_map is not None:
             try:
                 self.world = self.client.load_world(carla_map)
@@ -55,6 +56,8 @@ class CarlaSimulator(DrivingSimulator):
             else:
                 raise RuntimeError("CARLA only supports OpenDrive maps")
         self.timestep = timestep
+
+        self.client.set_timeout(timeout)  # decrease timeout for normal operation
 
         if traffic_manager_port is None:
             traffic_manager_port = port + 6000
@@ -111,6 +114,13 @@ class CarlaSimulation(DrivingSimulation):
         self.record = record
         self.scenario_number = scenario_number
         self.cameraManager = None
+        self.semsegManager = None
+        self.weather = str(scene.params.get("weather"))
+        self.data_recorder = DataRecorder(weather=self.weather)
+        self.frame_num = 0
+
+        self.display: pygame.Surface = scene.display
+        self.hud = visuals.HUD(*self.display.get_size())
 
         super().__init__(scene, **kwargs)
 
@@ -124,20 +134,13 @@ class CarlaSimulation(DrivingSimulation):
 
         # Setup HUD
         if self.render:
-            self.displayDim = (1280, 720)
-            self.displayClock = pygame.time.Clock()
-            self.camTransform = 0
-            pygame.init()
-            pygame.font.init()
-            self.hud = visuals.HUD(*self.displayDim)
-            self.display = pygame.display.set_mode(
-                self.displayDim, pygame.HWSURFACE | pygame.DOUBLEBUF
-            )
             self.cameraManager = None
+            self.semsegManager = None
 
         if self.record:
             if not os.path.exists(self.record):
                 os.mkdir(self.record)
+
             name = "{}/scenario{}.log".format(self.record, self.scenario_number)
             self.client.start_recorder(name)
 
@@ -146,13 +149,14 @@ class CarlaSimulation(DrivingSimulation):
 
         # Set up camera manager and collision sensor for ego
         if self.render:
-            camIndex = 0
-            camPosIndex = 0
             egoActor = self.objects[0].carlaActor
-            self.cameraManager = visuals.CameraManager(self.world, egoActor, self.hud)
-            self.cameraManager._transform_index = camPosIndex
-            self.cameraManager.set_sensor(camIndex)
-            self.cameraManager.set_transform(self.camTransform)
+            self.cameraManager = visuals.CameraManager(
+                self.world, egoActor, self.hud, render_to_screen=False
+            )
+            self.cameraManager.set_sensor(0)
+
+            self.semsegManager = visuals.CameraManager(self.world, egoActor, self.hud)
+            self.semsegManager.set_sensor(4)
 
         self.world.tick()  ## allowing manualgearshift to take effect    # TODO still need this?
 
@@ -172,6 +176,10 @@ class CarlaSimulation(DrivingSimulation):
                 )
 
     def createObjectInSimulator(self, obj):
+        if obj is None:
+            warnings.warn("Requested instantiation of NoneType object")
+            return
+
         # Extract blueprint
         try:
             blueprint = self.blueprintLib.find(obj.blueprint)
@@ -243,6 +251,10 @@ class CarlaSimulation(DrivingSimulation):
                     f"Unable to spawn carla controller for object {obj}"
                 )
             obj.carlaController = controller
+
+        if hasattr(obj, "tag") and obj.tag == "leadCar":
+            self.lead_car = obj
+
         return carlaActor
 
     def executeActions(self, allActions):
@@ -261,8 +273,32 @@ class CarlaSimulation(DrivingSimulation):
 
         # Render simulation
         if self.render:
-            self.cameraManager.render(self.display)
+            brake = left_blinker = right_blinker = False
+            vehicle = "<UNKNOWN>"
+
+            if self.lead_car:
+                light_state = self.lead_car.carlaActor.get_light_state()
+                brake = (light_state & carla.VehicleLightState.Brake) != 0
+                left_blinker = (light_state & carla.VehicleLightState.LeftBlinker) != 0
+                right_blinker = (light_state & carla.VehicleLightState.RightBlinker) != 0
+                vehicle = self.lead_car.blueprint
+            else:
+                return
+
+            light_state = (brake, left_blinker, right_blinker)
+
+            self.cameraManager.render(self.display, light_state, vehicle, self.weather)
+            self.semsegManager.render(self.display, light_state, vehicle, self.weather)
+
+            self.frame_num += 1
+            if False and self.frame_num % 1 == 0:
+                self.cameraManager._render_to_screen ^= True
+                self.semsegManager._render_to_screen ^= True
+
             pygame.display.flip()
+            self.data_recorder.set_light_state(light_state)
+            self.data_recorder.set_vehicle(vehicle)
+            self.data_recorder.ingest(self.cameraManager.image, self.semsegManager.image)
 
     def getProperties(self, obj, properties):
         # Extract Carla properties
@@ -305,8 +341,10 @@ class CarlaSimulation(DrivingSimulation):
                     obj.carlaController.stop()
                     obj.carlaController.destroy()
                 obj.carlaActor.destroy()
-        if self.render and self.cameraManager:
+        if self.cameraManager:
             self.cameraManager.destroy_sensor()
+        if self.semsegManager:
+            self.semsegManager.destroy_sensor()
 
         self.client.stop_recorder()
 

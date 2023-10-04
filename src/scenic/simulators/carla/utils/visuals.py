@@ -25,6 +25,7 @@
 
 import datetime
 import math
+import os
 import weakref
 
 import carla
@@ -266,12 +267,12 @@ class CollisionSensor(object):
 
 
 class CameraManager(object):
-    def __init__(self, world, actor, hud):
+    def __init__(self, world, actor, hud, render_to_screen: bool = True):
         self.sensor = None
         self._surface = None
         self._actor = actor
         self._hud = hud
-        self.images = []
+        self._render_to_screen = render_to_screen
         self._camera_transforms = [
             carla.Transform(carla.Location(x=-5.5, z=2.8), carla.Rotation(pitch=-15)),
             carla.Transform(carla.Location(x=1.6, z=1.7)),
@@ -303,13 +304,23 @@ class CameraManager(object):
         for item in self._sensors:
             bp = bp_library.find(item[0])
             if item[0].startswith("sensor.camera"):
-                bp.set_attribute("image_size_x", str(hud.dim[0]))
-                bp.set_attribute("image_size_y", str(hud.dim[1]))
+                bp.set_attribute("image_size_x", str(1920))
+                bp.set_attribute("image_size_y", str(1080))
             item.append(bp)
         self._index = None
 
+        self.light_icons = []
+        for name in ('brake', 'left', 'right'):
+            img = pygame.image.load(os.path.join('/home/carla/Scenic', "assets", "img", f"{name}.png"))
+            img = pygame.transform.scale(img, (64, 64))
+            self.light_icons.append(img)
+
+        self.font = pygame.font.SysFont('arial', 30)
+
+        self.image = None
+
     def toggle_camera(self):
-        set_transform((self._transform_index + 1) % len(self._camera_transforms))
+        self.set_transform((self._transform_index + 1) % len(self._camera_transforms))
 
     def set_transform(self, idx):
         self._transform_index = idx
@@ -336,13 +347,19 @@ class CameraManager(object):
             self.sensor.listen(lambda image: CameraManager._parse_image(weak_self, image))
         self._index = index
 
-    def render(self, display):
-        if self._surface is not None:
-            display.blit(self._surface, (0, 0))
+    def render(self, display: pygame.Surface, light_states, vehicle_name, weather):
+        if self._render_to_screen and self._surface is not None:
+            display.blit(pygame.transform.scale(self._surface, self._hud.dim), (0, 0))
+            for i, (state, img) in enumerate(zip(light_states, self.light_icons)):
+                if state:
+                    display.blit(img, (i*64, 0))
+            
+            text = self.font.render(f"{vehicle_name.split('.')[-1]} | {weather}", True, (255, 255, 255))
+            display.blit(text, (3*64 + 10, 15))
 
     @staticmethod
     def _parse_image(weak_self, image):
-        self = weak_self()
+        self: CameraManager = weak_self()
         if not self:
             return
         if self._sensors[self._index][0].startswith("sensor.lidar"):
@@ -355,17 +372,20 @@ class CameraManager(object):
             lidar_data = lidar_data.astype(np.int32)
             lidar_data = np.reshape(lidar_data, (-1, 2))
             lidar_img_size = (self._hud.dim[0], self._hud.dim[1], 3)
-            lidar_img = np.zeros(lidar_img_size)
-            lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
-            self._surface = pygame.surfarray.make_surface(lidar_img)
+            array = np.zeros(lidar_img_size)
+            array[tuple(lidar_data.T)] = (255, 255, 255)
+            if self._render_to_screen:
+                self._surface = pygame.surfarray.make_surface(array)
         else:
             image.convert(self._sensors[self._index][1])
             array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
             array = np.reshape(array, (image.height, image.width, 4))
             array = array[:, :, :3]
             array = array[:, :, ::-1]
-            self._surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
-        self.images.append(image)
+            if self._render_to_screen:
+                self._surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
+        
+        self.image = array.copy()
 
     def destroy_sensor(self):
         if self.sensor is not None:

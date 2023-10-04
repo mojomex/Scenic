@@ -80,16 +80,24 @@ param weather = Uniform(
     'CloudyNoon',
     'WetNoon',
     'WetCloudyNoon',
-    'SoftRainNoon',
     'MidRainyNoon',
     'HardRainNoon',
+    'SoftRainNoon',
     'ClearSunset',
     'CloudySunset',
     'WetSunset',
     'WetCloudySunset',
-    'SoftRainSunset',
     'MidRainSunset',
-    'HardRainSunset'
+    'HardRainSunset',
+    'SoftRainSunset',
+    'ClearNight',
+    'CloudyNight',
+    'WetNight',
+    'WetCloudyNight',
+    'SoftRainNight',
+    'MidRainyNight',
+    'HardRainNight',
+    'DustStorm',
 )
 
 simulator CarlaSimulator(

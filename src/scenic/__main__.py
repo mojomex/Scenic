@@ -9,6 +9,7 @@ import time
 import warnings
 
 import numpy
+import pygame
 
 import scenic
 from scenic.core.distributions import RejectionException
@@ -266,8 +267,22 @@ try:
                 )
 
         successCount = 0
+        totalCount = 0
+
+        displayDim = (1280, 720)
+        displayClock = pygame.time.Clock()
+        pygame.init()
+        pygame.font.init()
+        display = pygame.display.set_mode(
+            displayDim, pygame.HWSURFACE | pygame.DOUBLEBUF
+        )
+
         while True:
+            totalCount += 1
+            pygame.display.set_caption(f"Scenic - Run #{totalCount}")
+            display.fill('black')
             scene, _ = generateScene()
+            scene.display = display  # pass through to simulator
             if args.simulate:
                 success = runSimulation(scene)
                 if success:
