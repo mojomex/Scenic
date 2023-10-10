@@ -143,6 +143,11 @@ class CarlaSimulation(DrivingSimulation):
 
             name = "{}/scenario{}.log".format(self.record, self.scenario_number)
             self.client.start_recorder(name)
+        
+        # Despawn any cars that survived cleanup of the last simulation
+        for actor in self.world.get_actors():
+            if isinstance(actor, carla.Vehicle):
+                actor.destroy()
 
         # Create objects.
         super().setup()
