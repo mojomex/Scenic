@@ -3,14 +3,17 @@ import re
 import sys
 from typing import List, Optional, Tuple
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 import multiprocessing as mp
 import traceback
 import shutil
+from termcolor import colored
 
 # W, H
-OUTPUT_SIZE = (224, 224)
-BBOX_MIN_SIZE = (80, 80)
+BBOX_SIZE = np.array([256, 256], dtype=np.int32)
+MARGIN_SIZE = BBOX_SIZE // 2
+OUTPUT_SIZE = BBOX_SIZE + 2 * MARGIN_SIZE
+BBOX_MIN_SIZE = (100, 100)
 
 CAR_SEM_VALS = [
     13,  # rider
@@ -89,7 +92,6 @@ def _ingest_async(
     mask = mask[l:r, t:b]
     mask = np.stack([mask] * 3, axis=2)
 
-    cam_bboxed = cam[l:r, t:b, :]
     sem_bboxed = sem[l:r, t:b, :]
     light_mask = light_mask[l:r, t:b]
 
@@ -97,26 +99,29 @@ def _ingest_async(
     # Calculate light activations
     ################################
 
-    light_ids = np.round(np.where(light_mask, sem_bboxed[:, :, 2] / 255 * 16, -1)).astype(np.int8)
+    light_ids = np.round(np.where(light_mask, sem_bboxed[:, :, 2] / 255 * 16, -1)).astype(
+        np.int8
+    )
     light_activations = sem_bboxed[:, :, 1] / 255
 
     def _get_score(light_id):
         return np.max(np.where(light_ids == light_id, light_activations, -1))
 
     # brake (Y=8+4), left (R=8), right (M=8+2)
-    light_scores = [
-        _get_score(12),
-        _get_score(8),
-        _get_score(10)
-    ]
-
+    light_scores = [_get_score(12), _get_score(8), _get_score(10)]
 
     ################################
     # Resize to 224x224, assemble
     ################################
 
-    cam_img = Image.fromarray(cam_bboxed)
-    sem_img = Image.fromarray(sem_bboxed)
+    margin_l, margin_r = min(MARGIN_SIZE[0], l), min(MARGIN_SIZE[0], cam.shape[0] - r)
+    margin_t, margin_b = min(MARGIN_SIZE[1], t), min(MARGIN_SIZE[1], cam.shape[1] - b)
+
+    cam_cropped = cam[l - margin_l : r + margin_r, t - margin_t : b + margin_b, :]
+    sem_cropped = sem[l - margin_l : r + margin_r, t - margin_t : b + margin_b, :]
+
+    cam_img = Image.fromarray(cam_cropped)
+    sem_img = Image.fromarray(sem_cropped)
 
     cam_img = cam_img.resize(OUTPUT_SIZE)
     sem_img = sem_img.resize(OUTPUT_SIZE)
@@ -130,12 +135,13 @@ def _ingest_async(
     # Label lights not found in the mask as U (unknown), lights that are off in this frame as O (off),
     # otherwise use label from the light_state
     current_light_state = "".join(
-        ["U" if s < 0 else ("O" if s < .5 else c) for c, s in zip(light_state, light_scores)]
+        [
+            "U" if s < 0 else ("O" if s < 0.5 else c)
+            for c, s in zip(light_state, light_scores)
+        ]
     )
 
-    for i, (state, icon) in enumerate(
-        zip(current_light_state, signal_icons)
-    ):
+    for i, (state, icon) in enumerate(zip(current_light_state, signal_icons)):
         if state == "U":
             continue
         if state == "O":
@@ -147,10 +153,36 @@ def _ingest_async(
     # Write output
     ################################
 
-    filename = [f"{frame_number:04d}", vehicle, weather, light_state, current_light_state, ".png"]
-    filename = '_'.join([re.sub(r"\W", ".", str(s)) for s in filename])
+    scale_w = cam_cropped.shape[0] / OUTPUT_SIZE[0]
+    scale_h = cam_cropped.shape[1] / OUTPUT_SIZE[1]
+
+    filename = [
+        f"{frame_number:04d}",
+        vehicle,
+        weather,
+        light_state,
+        current_light_state,
+        "back",
+        f"l{margin_l / scale_w:.0f}t{margin_t / scale_h:.0f}r{margin_r / scale_w:.0f}b{margin_b / scale_h:.0f}",
+    ]
+    filename = "_".join([re.sub(r"\W|_", ".", str(s)) for s in filename]) + '.png'
     dst.save(os.path.join(path, filename))
-    _print(f"Saved{' (some lights occluded)' if 'U' in current_light_state else ''}")
+
+    def _colored(light_state_str):
+        b = light_state_str[0]
+        l = light_state_str[1]
+        r = light_state_str[2]
+        b = colored(b, "light_red" if b == "B" else ("red" if b == "O" else "dark_grey"))
+        l = colored(
+            l, "light_yellow" if l == "L" else ("yellow" if l == "O" else "dark_grey")
+        )
+        r = colored(
+            r, "light_yellow" if r == "R" else ("yellow" if r == "O" else "dark_grey")
+        )
+
+        return b + l + r
+
+    _print(f"Saved: lbl={_colored(light_state)} cur={_colored(current_light_state)}")
 
 
 class DataRecorder:
@@ -227,7 +259,7 @@ class DataRecorder:
 
         if self._vehicle is None or self._light_state is None or self._weather is None:
             return
-        
+
         def _supress_error_print(e: BaseException):
             if isinstance(e, KeyboardInterrupt):
                 self.pool.terminate()
@@ -246,5 +278,5 @@ class DataRecorder:
                 self._vehicle,
                 self._weather,
             ),
-            error_callback=_supress_error_print
+            error_callback=_supress_error_print,
         )

@@ -120,7 +120,7 @@ class CarlaSimulation(DrivingSimulation):
         self.frame_num = 0
 
         self.display: pygame.Surface = scene.display
-        self.hud = visuals.HUD(*self.display.get_size())
+        self.hud = visuals.HUD(*self.display.get_size() if self.display is not None else (8, 8))
 
         super().__init__(scene, **kwargs)
 
@@ -295,10 +295,15 @@ class CarlaSimulation(DrivingSimulation):
                 self.cameraManager._render_to_screen ^= True
                 self.semsegManager._render_to_screen ^= True
 
-            pygame.display.flip()
+            if self.display is not None:
+                pygame.display.flip()
             self.data_recorder.set_light_state(light_state)
             self.data_recorder.set_vehicle(vehicle)
-            self.data_recorder.ingest(self.cameraManager.image, self.semsegManager.image)
+
+            while self.cameraManager.has_image() and self.semsegManager.has_image():
+                cam_img = self.cameraManager.parse_image()
+                sem_img = self.semsegManager.parse_image()
+                self.data_recorder.ingest(cam_img, sem_img)
 
     def getProperties(self, obj, properties):
         # Extract Carla properties

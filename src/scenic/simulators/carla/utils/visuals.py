@@ -26,7 +26,10 @@
 import datetime
 import math
 import os
+import time
+from typing import Optional
 import weakref
+import queue
 
 import carla
 from carla import ColorConverter as cc
@@ -317,7 +320,7 @@ class CameraManager(object):
 
         self.font = pygame.font.SysFont('arial', 30)
 
-        self.image = None
+        self.queue = queue.Queue()
 
     def toggle_camera(self):
         self.set_transform((self._transform_index + 1) % len(self._camera_transforms))
@@ -344,11 +347,11 @@ class CameraManager(object):
             )
             # Pass lambda a weak reference to self to avoid circular reference
             weak_self = weakref.ref(self)
-            self.sensor.listen(lambda image: CameraManager._parse_image(weak_self, image))
+            self.sensor.listen(lambda img: CameraManager._queue_put(weak_self, img))
         self._index = index
 
-    def render(self, display: pygame.Surface, light_states, vehicle_name, weather):
-        if self._render_to_screen and self._surface is not None:
+    def render(self, display: Optional[pygame.Surface], light_states, vehicle_name, weather):
+        if self._render_to_screen and self._surface is not None and display is not None:
             display.blit(pygame.transform.scale(self._surface, self._hud.dim), (0, 0))
             for i, (state, img) in enumerate(zip(light_states, self.light_icons)):
                 if state:
@@ -358,10 +361,22 @@ class CameraManager(object):
             display.blit(text, (3*64 + 10, 15))
 
     @staticmethod
-    def _parse_image(weak_self, image):
+    def _queue_put(weak_self, image):
         self: CameraManager = weak_self()
         if not self:
             return
+
+        self.queue.put(image)
+
+    def has_image(self):
+        return not self.queue.empty()
+
+    def parse_image(self) -> np.ndarray:
+        if not self.has_image():
+            raise RuntimeError("Called parse_image but the queue has no images")
+        
+        image = self.queue.get()
+        
         if self._sensors[self._index][0].startswith("sensor.lidar"):
             points = np.frombuffer(image.raw_data, dtype=np.dtype("f4"))
             points = np.reshape(points, (int(points.shape[0] / 3), 3))
@@ -385,7 +400,7 @@ class CameraManager(object):
             if self._render_to_screen:
                 self._surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
         
-        self.image = array.copy()
+        return array.copy()
 
     def destroy_sensor(self):
         if self.sensor is not None:
