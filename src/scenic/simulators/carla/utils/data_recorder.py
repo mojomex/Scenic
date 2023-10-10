@@ -11,8 +11,8 @@ from termcolor import colored
 
 # W, H
 BBOX_SIZE = np.array([256, 256], dtype=np.int32)
-MARGIN_SIZE = BBOX_SIZE // 2
-OUTPUT_SIZE = BBOX_SIZE + 2 * MARGIN_SIZE
+MARGIN_SIZE = np.array([.5, .5])
+OUTPUT_SIZE = (BBOX_SIZE * (1 + 2 * MARGIN_SIZE)).astype(np.int32)
 BBOX_MIN_SIZE = (100, 100)
 
 CAR_SEM_VALS = [
@@ -79,21 +79,21 @@ def _ingest_async(
     h = np.nonzero(mask.sum(axis=1))
     v = np.nonzero(mask.sum(axis=0))
 
-    l, r = h[0][0], h[0][-1] + 1
-    t, b = v[0][0], v[0][-1] + 1
+    t, b = h[0][0], h[0][-1] + 1
+    l, r = v[0][0], v[0][-1] + 1
 
-    if (r - l) < BBOX_MIN_SIZE[0] or (b - t) < BBOX_MIN_SIZE[1]:
-        _print(f"Too small ({r - l :3d}, {b - t :3d}) < {BBOX_MIN_SIZE}, skipping")
+    if (b - t) < BBOX_MIN_SIZE[0] or (r - l) < BBOX_MIN_SIZE[1]:
+        _print(f"Too small ({b - t :3d}, {r - l :3d}) < {BBOX_MIN_SIZE}, skipping")
 
     ################################
     # Crop masks / images to bbox
     ################################
 
-    mask = mask[l:r, t:b]
+    mask = mask[t:b, l:r]
     mask = np.stack([mask] * 3, axis=2)
 
-    sem_bboxed = sem[l:r, t:b, :]
-    light_mask = light_mask[l:r, t:b]
+    sem_bboxed = sem[t:b, l:r, :]
+    light_mask = light_mask[t:b, l:r]
 
     ################################
     # Calculate light activations
@@ -114,17 +114,25 @@ def _ingest_async(
     # Resize to 224x224, assemble
     ################################
 
-    margin_l, margin_r = min(MARGIN_SIZE[0], l), min(MARGIN_SIZE[0], cam.shape[0] - r)
-    margin_t, margin_b = min(MARGIN_SIZE[1], t), min(MARGIN_SIZE[1], cam.shape[1] - b)
+    bbox_w = r - l
+    bbox_h = b - t
 
-    cam_cropped = cam[l - margin_l : r + margin_r, t - margin_t : b + margin_b, :]
-    sem_cropped = sem[l - margin_l : r + margin_r, t - margin_t : b + margin_b, :]
+    margin_t = int(min(MARGIN_SIZE[0] * bbox_h, t))
+    margin_b = int(min(MARGIN_SIZE[0] * bbox_h, cam.shape[0] - b))
+    margin_l = int(min(MARGIN_SIZE[1] * bbox_w, l))
+    margin_r = int(min(MARGIN_SIZE[1] * bbox_w, cam.shape[1] - r))
+
+    cam_cropped = cam[t - margin_t : b + margin_b, l - margin_l : r + margin_r, :]
+    sem_cropped = sem[t - margin_t : b + margin_b, l - margin_l : r + margin_r, :]
 
     cam_img = Image.fromarray(cam_cropped)
     sem_img = Image.fromarray(sem_cropped)
 
     cam_img = cam_img.resize(OUTPUT_SIZE)
     sem_img = sem_img.resize(OUTPUT_SIZE)
+
+    scale_h = cam_cropped.shape[0] / OUTPUT_SIZE[0]
+    scale_w = cam_cropped.shape[1] / OUTPUT_SIZE[1]
 
     dst = Image.new(
         "RGB", (cam_img.width + sem_img.width + cam_img.height // 3, cam_img.height)
@@ -153,17 +161,14 @@ def _ingest_async(
     # Write output
     ################################
 
-    scale_w = cam_cropped.shape[0] / OUTPUT_SIZE[0]
-    scale_h = cam_cropped.shape[1] / OUTPUT_SIZE[1]
-
     filename = [
         f"{frame_number:04d}",
         vehicle,
         weather,
+        "back",
         light_state,
         current_light_state,
-        "back",
-        f"l{margin_l / scale_w:.0f}t{margin_t / scale_h:.0f}r{margin_r / scale_w:.0f}b{margin_b / scale_h:.0f}",
+        f"l{margin_l / scale_w:03.0f}r{margin_r / scale_w:03.0f}t{margin_t / scale_h:03.0f}b{margin_b / scale_h:03.0f}",
     ]
     filename = "_".join([re.sub(r"\W|_", ".", str(s)) for s in filename]) + '.png'
     dst.save(os.path.join(path, filename))
