@@ -307,13 +307,13 @@ class CameraManager(object):
         for item in self._sensors:
             bp = bp_library.find(item[0])
             if item[0].startswith("sensor.camera"):
-                bp.set_attribute("image_size_x", str(1920))
-                bp.set_attribute("image_size_y", str(1080))
+                bp.set_attribute("image_size_x", str(3480))
+                bp.set_attribute("image_size_y", str(2160))
             item.append(bp)
         self._index = None
 
         self.light_icons = []
-        for name in ('brake', 'left', 'right'):
+        for name in ('brake', 'left_ind', 'right_ind'):
             img = pygame.image.load(os.path.join('/home/carla/Scenic', "assets", "img", f"{name}.png"))
             img = pygame.transform.scale(img, (64, 64))
             self.light_icons.append(img)

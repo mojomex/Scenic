@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from typing import List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple, Union
 import numpy as np
 from PIL import Image
 import multiprocessing as mp
@@ -11,7 +11,7 @@ from termcolor import colored
 
 # W, H
 BBOX_SIZE = np.array([256, 256], dtype=np.int32)
-MARGIN_SIZE = np.array([.5, .5])
+MARGIN_SIZE = np.array([0.5, 0.5])
 OUTPUT_SIZE = (BBOX_SIZE * (1 + 2 * MARGIN_SIZE)).astype(np.int32)
 BBOX_MIN_SIZE = (100, 100)
 
@@ -26,6 +26,20 @@ CAR_SEM_VALS = [
 ]
 
 LIGHT_SEM_VAL = 32
+
+# The numeric IDs stored in semantic segmentation blue channel (0-255) are mapped to (0-15)
+LIGHT_IDS = {
+    "low_beam": 0,
+    "high_beam": 2,
+    "reverse": 4,
+    "front_fog": 6,
+    "rear_fog": 7,
+    "left_ind": 8,
+    "right_ind": 10,
+    "brake": 12,
+    "front_pos": 14,
+    "rear_pos": 15,
+}
 
 
 def _safe_ingest_async(*args, **kwargs):
@@ -44,7 +58,7 @@ def _ingest_async(
     sem: np.ndarray,
     path: str,
     frame_number: int,
-    signal_icons: List[np.ndarray],
+    icons: Dict[str, np.ndarray],
     light_state,
     vehicle,
     weather,
@@ -104,11 +118,41 @@ def _ingest_async(
     )
     light_activations = sem_bboxed[:, :, 1] / 255
 
-    def _get_score(light_id):
+    def _get_score(light_name: str):
+        light_id = LIGHT_IDS[light_name]
         return np.max(np.where(light_ids == light_id, light_activations, -1))
 
-    # brake (Y=8+4), left (R=8), right (M=8+2)
-    light_scores = [_get_score(12), _get_score(8), _get_score(10)]
+    light_scores = [
+        _get_score("brake"),
+        _get_score("left_ind"),
+        _get_score("right_ind"),
+    ]
+
+    # Facing classification:
+    # If we see only brake lights and not headlights, we are facing the back of the car
+    # If we see only headlights and not brake lights, we are facing the front of the car
+    # If we see both or none, we are facing the side of the car
+
+    front_score = max(
+        _get_score("low_beam"),
+        _get_score("high_beam"),
+        _get_score("front_pos"),
+        _get_score("front_fog"),
+    )
+
+    back_score = max(
+        _get_score("brake"),
+        _get_score("rear_pos"),
+        _get_score("rear_fog"),
+        _get_score("reverse"),
+    )
+
+    if back_score >= 0 and front_score < 0:
+        facing = "back"
+    elif back_score < 0 and front_score >= 0:
+        facing = "front"
+    else:
+        facing = "side"
 
     ################################
     # Resize to 224x224, assemble
@@ -149,13 +193,17 @@ def _ingest_async(
         ]
     )
 
-    for i, (state, icon) in enumerate(zip(current_light_state, signal_icons)):
+    for i, (state, icon_name) in enumerate(zip(current_light_state, ("brake", "left_ind", "right_ind"))):
         if state == "U":
-            continue
-        if state == "O":
-            icon //= 3
+            continue  # display no icon for UNKNOWN
 
-        dst.paste(Image.fromarray(icon), (cam_img.width * 2, (i * cam_img.height) // 3))
+        icon = icons[icon_name]
+        if state == "O":
+            icon //= 3  # display dim icon for OFF
+
+        dst.paste(Image.fromarray(icon), (cam_img.width * 2, (i * cam_img.height) // 4))
+    
+    dst.paste(Image.fromarray(icons[facing]), (cam_img.width * 2, (3 * cam_img.height) // 4))
 
     ################################
     # Write output
@@ -165,12 +213,12 @@ def _ingest_async(
         f"{frame_number:04d}",
         vehicle,
         weather,
-        "back",
+        facing,
         light_state,
         current_light_state,
         f"l{margin_l / scale_w:03.0f}r{margin_r / scale_w:03.0f}t{margin_t / scale_h:03.0f}b{margin_b / scale_h:03.0f}",
     ]
-    filename = "_".join([re.sub(r"\W|_", ".", str(s)) for s in filename]) + '.png'
+    filename = "_".join([re.sub(r"\W|_", ".", str(s)) for s in filename]) + ".png"
     dst.save(os.path.join(path, filename))
 
     def _colored(light_state_str):
@@ -184,8 +232,13 @@ def _ingest_async(
         r = colored(
             r, "light_yellow" if r == "R" else ("yellow" if r == "O" else "dark_grey")
         )
+        
+        if facing == "side": f = "U"
+        elif facing == "front": f = "F"
+        elif facing == "back": f = "B"
+        else: raise RuntimeError(f"Unknown facing: {facing}")
 
-        return b + l + r
+        return b + l + r + f
 
     _print(f"Saved: lbl={_colored(light_state)} cur={_colored(current_light_state)}")
 
@@ -210,27 +263,37 @@ class DataRecorder:
         self.frame_number = -1
         self.pool = mp.Pool(12, maxtasksperchild=10)
 
-        mask_sz = OUTPUT_SIZE[1] // 3
-        self.signal_masks = [
+        mask_sz = OUTPUT_SIZE[1] // 4
+        signal_masks = {name:
             Image.open(f"/home/carla/Scenic/assets/img/{name}.png")
-            for name in ("brake", "left", "right")
-        ]
-        self.signal_masks = [
+            for name in ("brake", "left_ind", "right_ind", "back", "front", "side")
+        }
+        signal_masks = {name:
             mask.resize((mask_sz, mask_sz), Image.Resampling.BILINEAR)
-            for mask in self.signal_masks
-        ]
-        self.signal_masks = [np.array(mask) for mask in self.signal_masks]
+            for name, mask in signal_masks.items()
+        }
+        signal_masks = {name: np.array(mask) for name, mask in signal_masks.items()}
 
         # Ordered BLR
-        mask_colors = [np.array([1.0, 0, 0])] + [np.array([1, 0.867, 0])] * 2
-        self.signal_masks = [
-            self._color_mask(mask, color)
-            for mask, color in zip(self.signal_masks, mask_colors)
-        ]
+        mask_colors = {
+            "brake": np.array([1.0, 0, 0]),
+            "left_ind": np.array([1, 0.867, 0]),
+            "right_ind": np.array([1, 0.867, 0]),
+            "back": np.array([1, 1, 1]),
+            "front": np.array([1, 1, 1]),
+            "side": np.array([1, 1, 1]),
+        }
+
+        self.signal_masks = {name:
+            self._color_mask(signal_masks[name], mask_colors[name])
+            for name in signal_masks
+        }
+
 
         self._weather = None
         self._light_state = None
         self._vehicle = None
+
         if weather is not None:
             self.set_weather(weather)
         if light_state is not None:
