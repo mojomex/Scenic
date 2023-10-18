@@ -65,26 +65,23 @@ def _ingest_async(
 ):
     def _print(msg):
         w = shutil.get_terminal_size()[0]
-        msg = f"{frame_number:3d}: {msg}"
+        msg = f"\r{frame_number:3d}: {msg}"
         if len(msg) < w:
             msg += " " * (w - len(msg))
-        print(msg, end="\r", flush=True)
+        print(msg, end="", flush=True)
 
     ################################
     # Find pixels occupied by car
     ################################
 
-    mask = (sem[:, :, 0] >= min(CAR_SEM_VALS)) & (sem[:, :, 0] <= max(CAR_SEM_VALS))
     light_mask = sem[:, :, 0] == 32
-    mask |= light_mask
-
-    if not mask.any():
-        _print("No car detected, skipping")
-        return
 
     if not light_mask.any():
         _print("No lights detected, skipping")
         return
+
+    mask = (sem[:, :, 0] >= min(CAR_SEM_VALS)) & (sem[:, :, 0] <= max(CAR_SEM_VALS))
+    mask |= light_mask
 
     ################################
     # Calculate bounding box
@@ -219,7 +216,7 @@ def _ingest_async(
         f"l{margin_l / scale_w:03.0f}r{margin_r / scale_w:03.0f}t{margin_t / scale_h:03.0f}b{margin_b / scale_h:03.0f}",
     ]
     filename = "_".join([re.sub(r"\W|_", ".", str(s)) for s in filename]) + ".png"
-    dst.save(os.path.join(path, filename))
+    dst.save(os.path.join(path, filename), compress_level=9)
 
     def _colored(light_state_str):
         b = light_state_str[0]
