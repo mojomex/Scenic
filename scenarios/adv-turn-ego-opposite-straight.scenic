@@ -104,8 +104,9 @@ ego = new Car at egoSpawnPt,
 adversary = new Car at advSpawnPt,
     with tag "leadCar",
     with blueprint advBlueprint,
-    with behavior FollowTrajectoryBehavior(globalParameters.ADV_SPEED, advTrajectory, advLightState)
+    with behavior LeadingCarBehavior(globalParameters.ADV_SPEED, advTrajectory, advLightState)
 
 require EGO_INIT_DIST[0] <= (distance to intersection) <= EGO_INIT_DIST[1]
 require ADV_INIT_DIST[0] <= (distance from adversary to intersection) <= ADV_INIT_DIST[1]
+require advLightState in PERMITTED_LIGHT_STATES[advTurnDirection]
 terminate when (distance to egoSpawnPt) > TERM_DIST
