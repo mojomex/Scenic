@@ -61,6 +61,10 @@ mainOptions.add_argument(
     "--2d", action="store_true", help="run Scenic in 2D compatibility mode"
 )
 
+mainOptions.add_argument(
+    "--headless", action="store_true", help="run Scenic in headless mode (no window opens)"
+)
+
 # Simulation options
 simOpts = parser.add_argument_group("dynamic simulation options")
 simOpts.add_argument(
@@ -272,7 +276,7 @@ try:
         pygame.init()
         pygame.font.init()
 
-        DISPLAY = False
+        DISPLAY = args.headless is False
         if DISPLAY:
             displayDim = (1280, 720)
             displayClock = pygame.time.Clock()

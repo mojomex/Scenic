@@ -156,11 +156,11 @@ class CarlaSimulation(DrivingSimulation):
         if self.render:
             egoActor = self.objects[0].carlaActor
             self.cameraManager = visuals.CameraManager(
-                self.world, egoActor, self.hud, render_to_screen=False
+                self.world, egoActor, self.hud
             )
             self.cameraManager.set_sensor(0)
 
-            self.semsegManager = visuals.CameraManager(self.world, egoActor, self.hud)
+            self.semsegManager = visuals.CameraManager(self.world, egoActor, self.hud, render_to_screen=False)
             self.semsegManager.set_sensor(4)
 
         self.world.tick()  ## allowing manualgearshift to take effect    # TODO still need this?

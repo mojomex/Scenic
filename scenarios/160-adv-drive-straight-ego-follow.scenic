@@ -1,4 +1,7 @@
 import carla
+from itertools import chain, combinations
+from functools import reduce
+from operator import or_
 
 param map = localPath('../../carla/Unreal/CarlaUE4/Content/Carla/Maps/OpenDrive/Town05.xodr')
 param carla_map = 'Town05'
@@ -16,14 +19,14 @@ ADV_BRAKING_THRESHOLD = 10
 BRAKE_ACTION = 1.0
 
 PERMITTED_ADV_MODELS = [
-#   "vehicle.audi.tt",                    # WW (all lights unknown)
-  "vehicle.carlamotors.firetruck",      # WW
+#   "vehicle.audi.tt",                    # WX (rear lights unknown)
+  "vehicle.carlamotors.firetruck",      # WW  (side spotlights count as low beams)
   "vehicle.chevrolet.impala",           # WW
   "vehicle.dodge.charger_2020",         # WW
   "vehicle.dodge.charger_police_2020",  # WW
 #   "vehicle.ford.ambulance",             # WW (some lights occluded)
   "vehicle.ford.crown",                 # WW
-  "vehicle.lincoln.mkz_2017",           # WW
+  # "vehicle.lincoln.mkz_2017",           # WW
   "vehicle.lincoln.mkz_2020",           # WW
   "vehicle.mercedes.coupe_2020",        # WW
 #   "vehicle.mercedes.sprinter",          # WW (some lights occluded)
@@ -41,16 +44,25 @@ PERMITTED_ADV_MODELS = [
 #   "vehicle.yamaha.yzf"                  # X (blinkers are tiny)
   ]
 
-PERMITTED_LIGHT_STATES = [
-    carla.VehicleLightState.NONE,
+PERMITTED_LIGHTS = [
     carla.VehicleLightState.LeftBlinker,
     carla.VehicleLightState.RightBlinker,
     carla.VehicleLightState.Brake,
-    carla.VehicleLightState.LeftBlinker | carla.VehicleLightState.RightBlinker,
-    carla.VehicleLightState.LeftBlinker | carla.VehicleLightState.Brake,
-    carla.VehicleLightState.RightBlinker | carla.VehicleLightState.Brake,
-    carla.VehicleLightState.LeftBlinker | carla.VehicleLightState.RightBlinker | carla.VehicleLightState.Brake,
+    carla.VehicleLightState.LowBeam,
+    carla.VehicleLightState.Reverse,
+    carla.VehicleLightState.Position,
+    carla.VehicleLightState.HighBeam,
+    carla.VehicleLightState.Interior,
+    carla.VehicleLightState.Special1,
+    carla.VehicleLightState.Special2,
 ]
+
+def powerset(iterable):
+    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+    s = list(iterable)
+    return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
+
+PERMITTED_LIGHTS = [reduce(or_, combo, carla.VehicleLightState.NONE) for combo in powerset(PERMITTED_LIGHTS)]
 
 ## DEFINING BEHAVIORS
 # EGO BEHAVIOR: Follow lane, and brake after passing a threshold distance to the leading car
@@ -77,7 +89,7 @@ lane = Uniform(*network.lanes)
 leadSpawnPoint = new OrientedPoint in lane.centerline
 
 advBlueprint = Uniform(*PERMITTED_ADV_MODELS)
-advLightState = Uniform(*PERMITTED_LIGHT_STATES)
+advLightState = Uniform(*PERMITTED_LIGHTS)
 
 adv = new Car at leadSpawnPoint,
         with tag "leadCar",

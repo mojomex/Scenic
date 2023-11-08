@@ -1,12 +1,13 @@
 import os
 import re
 import sys
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Optional, Tuple
 import numpy as np
 from PIL import Image
 import multiprocessing as mp
 import traceback
 import shutil
+import pandas as pd
 from termcolor import colored
 
 # W, H
@@ -58,7 +59,6 @@ def _ingest_async(
     sem: np.ndarray,
     path: str,
     frame_number: int,
-    icons: Dict[str, np.ndarray],
     light_state,
     vehicle,
     weather,
@@ -104,6 +104,7 @@ def _ingest_async(
     mask = np.stack([mask] * 3, axis=2)
 
     sem_bboxed = sem[t:b, l:r, :]
+    cam_bboxed = cam[t:b, l:r, :]
     light_mask = light_mask[t:b, l:r]
 
     ################################
@@ -117,39 +118,10 @@ def _ingest_async(
 
     def _get_score(light_name: str):
         light_id = LIGHT_IDS[light_name]
-        return np.max(np.where(light_ids == light_id, light_activations, -1))
+        id_mask = light_ids == light_id
+        return np.max(np.where(id_mask, light_activations, -1))
 
-    light_scores = [
-        _get_score("brake"),
-        _get_score("left_ind"),
-        _get_score("right_ind"),
-    ]
-
-    # Facing classification:
-    # If we see only brake lights and not headlights, we are facing the back of the car
-    # If we see only headlights and not brake lights, we are facing the front of the car
-    # If we see both or none, we are facing the side of the car
-
-    front_score = max(
-        _get_score("low_beam"),
-        _get_score("high_beam"),
-        _get_score("front_pos"),
-        _get_score("front_fog"),
-    )
-
-    back_score = max(
-        _get_score("brake"),
-        _get_score("rear_pos"),
-        _get_score("rear_fog"),
-        _get_score("reverse"),
-    )
-
-    if back_score >= 0 and front_score < 0:
-        facing = "back"
-    elif back_score < 0 and front_score >= 0:
-        facing = "front"
-    else:
-        facing = "side"
+    light_scores = {k: _get_score(k) for k in LIGHT_IDS.keys()}
 
     ################################
     # Resize to 224x224, assemble
@@ -175,69 +147,41 @@ def _ingest_async(
     scale_h = cam_cropped.shape[0] / OUTPUT_SIZE[0]
     scale_w = cam_cropped.shape[1] / OUTPUT_SIZE[1]
 
-    dst = Image.new(
-        "RGB", (cam_img.width + sem_img.width + cam_img.height // 3, cam_img.height)
-    )
-    dst.paste(cam_img, (0, 0))
-    dst.paste(sem_img, (cam_img.width, 0))
-
-    # Label lights not found in the mask as U (unknown), lights that are off in this frame as O (off),
-    # otherwise use label from the light_state
-    current_light_state = "".join(
-        [
-            "U" if s < 0 else ("O" if s < 0.5 else c)
-            for c, s in zip(light_state, light_scores)
-        ]
-    )
-
-    for i, (state, icon_name) in enumerate(zip(current_light_state, ("brake", "left_ind", "right_ind"))):
-        if state == "U":
-            continue  # display no icon for UNKNOWN
-
-        icon = icons[icon_name]
-        if state == "O":
-            icon //= 3  # display dim icon for OFF
-
-        dst.paste(Image.fromarray(icon), (cam_img.width * 2, (i * cam_img.height) // 4))
-    
-    dst.paste(Image.fromarray(icons[facing]), (cam_img.width * 2, (3 * cam_img.height) // 4))
-
     ################################
     # Write output
     ################################
+
+    metadata = pd.DataFrame(
+        {
+            "vehicle": vehicle,
+            "weather": weather,
+            "light_state": light_state,
+            "margin_l": int(margin_l / scale_w),
+            "margin_r": int(margin_r / scale_w),
+            "margin_t": int(margin_t / scale_h),
+            "margin_b": int(margin_b / scale_h),
+            **{f"score_{name}": score for name, score in light_scores.items()},
+        },
+        index=[frame_number],
+    )
 
     filename = [
         f"{frame_number:04d}",
         vehicle,
         weather,
-        facing,
         light_state,
-        current_light_state,
-        f"l{margin_l / scale_w:03.0f}r{margin_r / scale_w:03.0f}t{margin_t / scale_h:03.0f}b{margin_b / scale_h:03.0f}",
     ]
-    filename = "_".join([re.sub(r"\W|_", ".", str(s)) for s in filename]) + ".png"
-    dst.save(os.path.join(path, filename), compress_level=9)
+    filename = "_".join([re.sub(r"\W|_", ".", str(s)) for s in filename])
+    cam_img.save(os.path.join(path, filename + ".jpg"), quality=95)
+    sem_img.save(os.path.join(path, "mask_" + filename + ".png"), compress_level=9)
 
-    def _colored(light_state_str):
-        b = light_state_str[0]
-        l = light_state_str[1]
-        r = light_state_str[2]
-        b = colored(b, "light_red" if b == "B" else ("red" if b == "O" else "dark_grey"))
-        l = colored(
-            l, "light_yellow" if l == "L" else ("yellow" if l == "O" else "dark_grey")
-        )
-        r = colored(
-            r, "light_yellow" if r == "R" else ("yellow" if r == "O" else "dark_grey")
-        )
-        
-        if facing == "side": f = "U"
-        elif facing == "front": f = "F"
-        elif facing == "back": f = "B"
-        else: raise RuntimeError(f"Unknown facing: {facing}")
+    csv_filename = os.path.join(path, "metadata.csv")
+    if os.path.exists(csv_filename):
+        metadata.to_csv(csv_filename, mode="a", header=False)
+    else:
+        metadata.to_csv(csv_filename)
 
-        return b + l + r + f
-
-    _print(f"Saved: lbl={_colored(light_state)} cur={_colored(current_light_state)}")
+    _print(f"Saved: {vehicle} lbl={light_state}")
 
 
 class DataRecorder:
@@ -258,34 +202,7 @@ class DataRecorder:
         os.makedirs(self.path)
 
         self.frame_number = -1
-        self.pool = mp.Pool(12, maxtasksperchild=10)
-
-        mask_sz = OUTPUT_SIZE[1] // 4
-        signal_masks = {name:
-            Image.open(f"/home/carla/Scenic/assets/img/{name}.png")
-            for name in ("brake", "left_ind", "right_ind", "back", "front", "side")
-        }
-        signal_masks = {name:
-            mask.resize((mask_sz, mask_sz), Image.Resampling.BILINEAR)
-            for name, mask in signal_masks.items()
-        }
-        signal_masks = {name: np.array(mask) for name, mask in signal_masks.items()}
-
-        # Ordered BLR
-        mask_colors = {
-            "brake": np.array([1.0, 0, 0]),
-            "left_ind": np.array([1, 0.867, 0]),
-            "right_ind": np.array([1, 0.867, 0]),
-            "back": np.array([1, 1, 1]),
-            "front": np.array([1, 1, 1]),
-            "side": np.array([1, 1, 1]),
-        }
-
-        self.signal_masks = {name:
-            self._color_mask(signal_masks[name], mask_colors[name])
-            for name in signal_masks
-        }
-
+        self.pool = mp.Pool(12)
 
         self._weather = None
         self._light_state = None
@@ -312,10 +229,6 @@ class DataRecorder:
             vehicle = vehicle[len("vehicle.") :]
         self._vehicle = vehicle
 
-    def _color_mask(self, mask: np.ndarray, color: np.ndarray) -> np.ndarray:
-        colored_mask = mask[:, :, 3:4] * np.broadcast_to(color, (1, 1, color.shape[0]))
-        return colored_mask.astype(np.uint8)
-
     def ingest(self, cam: Optional[np.ndarray], sem: Optional[np.ndarray]):
         self.frame_number += 1
 
@@ -338,7 +251,6 @@ class DataRecorder:
                 sem,
                 self.path,
                 self.frame_number,
-                self.signal_masks,
                 self._light_state,
                 self._vehicle,
                 self._weather,
